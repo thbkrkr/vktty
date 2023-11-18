@@ -11,7 +11,7 @@ DISABLE_AUTO_UPDATE="true"
 DISABLE_UPDATE_PROMPT="true"
 COMPLETION_WAITING_DOTS="true"
 
-plugins=(git history-substring-search go docker docker-compose)
+plugins=(git history-substring-search kubectl helm)
 source $ZSH/oh-my-zsh.sh
 
 export HISTSIZE=10000000
@@ -20,6 +20,14 @@ export PATH=~/bin:/usr/games:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/
 # Show completion menu when number of options is at least 2
 zstyle ':completion:*' menu select=2
 
+#source <(kubectl completion zsh)
+
+#. /opt/homebrew/etc/profile.d/z.sh
+
+[ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
+
+export PATH="${KREW_ROOT:-$HOME/.krew}/bin:$PATH"
+
 ##########################
 
 # Tiny aliases
@@ -27,7 +35,7 @@ alias a='ansible'
 alias ap='ansible-playbook'
 alias c='clear'
 alias d='docker'
-alias dc='docker-compose'
+alias dc='docker compose'
 alias dm='docker-machine'
 alias e='echo'
 alias g='git'
@@ -73,25 +81,20 @@ dsh()  { docker exec -ti $@ sh }
 dbash() { docker exec -ti $@ bash }
 dzsh() { docker exec -ti $@ zsh }
 dstats() { docker stats $(docker ps | grep -v CON | sed "s/.*\s\([a-z].*\)/\1/" | awk '{printf $1" "}'); }
-
-# Docker machine aliases
 dme()  { eval $(docker-machine env --shell zsh $1); }
 
-# Apt
-alias get='sudo apt-get install -y'
-alias search='sudo apt-cache search'
+# Kubectl aliases/func
+alias kes="kubectl -n elastic-system"
+alias wkes="watch -n1 kubectl get elastic,po"
 
-####
-# Other aliases
+kgetdel() { kubectl get $1 | grep $2 | awk '{print $1"\n"}' | xargs -n1 kubectl delete $1 --force; }
+
+# Misc aliases/func
+
+alias get='apk add'
 
 # Tmux with terminal supports 256 colours
 alias tmux='tmux -2'
-
-# Display listened ports
-alias wholisten='sudo netstat -antulp | grep LISTE'
-
-####
-# Helpful functions
 
 # @help randpwd $length
 randpwd() {
@@ -113,34 +116,6 @@ jcl()   { curl -s localhost:$@ | jq .; }
 kurl() {
   curl -sSL --connect-timeout 3 $@ -o /dev/null \
     -w '{"url":"%{url_effective}","status":"%{http_code}","time":"%{time_total}"}\n'
-}
-
-# Update dotfiles
-updot() { cd ~/.dotfiles; git pull --rebase; ./install.sh; }
-
-# Display the IP and geo information of the current machine
-geoip() { curl -s freegeoip.net/json/$(curl -s ipaddr.ovh) | jq .; }
-
-# Display only the IP
-myip() {
-  curl -s ipaddr.ovh
-}
-
-# Update a specific apt repo
-# @help update_repo $repoName
-update_repo() {
-  sudo apt-get update -o Dir::Etc::sourcelist="sources.list.d/$1.list" \
-    -o Dir::Etc::sourceparts="-" -o APT::Get::List-Cleanup="0"
-}
-
-# Create a Git repo ready to accept push and with a post-receive to checkout the working directory
-create_push_repo() {
-  curl -s https://gist.githubusercontent.com/thbkrkr/d37ea4a4f912286ceb9b/raw/cce043b32a14b023868928a728aecf1f7c820b7b/prepare-pushgitrepo.sh | sh -s $1
-}
-
-# Tail and grep syslog as sudo
-stfg() {
-  sudo tail -f /var/log/syslog  | grep $1
 }
 
 msg() { echo -n '{"user":"'$USER'@'$(hostname)'", "message":"'$@'"}'; }
@@ -175,17 +150,6 @@ uup(){
   done
   cd $P
   echo "You are now in $PWD"
-}
-
-# Configure git user
-gitcfg(){
-  if [ "$#" -lt "2" ] ; then
-      echo "Usage: gitcfg <user> <email>"
-      return 1
-  fi
-  declare username=$1 email=$2
-  git config user.name "$username"
-  git config user.email "$email"
 }
 
 # Search files given a pattern in a directory
@@ -225,8 +189,3 @@ cplastcmdout(){
   cmd=$(fc -nl -1 | tr -d '\n')
   $cmd | xclip -sel clipboard
 }
-
-##########################
-
-# Source optional ~/.myzshrc
-[ -f ~/.myzshrc ] && source ~/.myzshrc

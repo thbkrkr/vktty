@@ -1,0 +1,55 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ktty
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ktty-sa
+  namespace: ktty
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ktty-cluster-admin-role-binding
+subjects:
+- kind: ServiceAccount
+  name: ktty-sa
+  namespace: ktty
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin 
+---
+apiVersion: v1 
+kind: Pod 
+metadata: 
+  name: ktty
+  namespace: ktty
+  labels:
+    app: ktty
+spec: 
+  serviceAccountName: ktty-sa
+  containers: 
+  - name: ktty 
+    image: krkr/ktty:69e9795
+    args: ["--port=8042", "--permit-write", "--credential=z:yolo", "tmux"]
+    stdin: true 
+    tty: true
+    ports:
+    - containerPort: 8042
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ktty
+  namespace: ktty
+spec:
+  type: NodePort
+  selector:
+    app: ktty
+  ports:
+  - protocol: TCP
+    port: 8042
+    nodePort: 31320
