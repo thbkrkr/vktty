@@ -10,7 +10,9 @@ help() {
 '
 }
 
-boostrap_template=deploy/ktty.yaml
+: $KTTY_TAG
+
+boostrap_template=deploy/bootstrap-ktty.yaml
 
 uuid_gen() {
   cat /proc/sys/kernel/random/uuid 2>/dev/null || echo "$RANDOM-$RANDOM-$RANDOM-$RANDOM"
@@ -18,7 +20,8 @@ uuid_gen() {
 
 boostrap_template() {
   uuid="$1"
-  sed -e "s/31320/3132$i/" -e "s/yolo/$uuid/" "$boostrap_template"
+  tag="$KTTY_TAG"
+  sed -e "s/latest/$tag/" -e "s/31320/3132$i/" -e "s/yolo/$uuid/" "$boostrap_template"
 }
 
 create() {

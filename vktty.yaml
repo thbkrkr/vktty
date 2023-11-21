@@ -36,6 +36,11 @@ spec:
     image: krkr/vktty:latest
     ports:
     - containerPort: 8080
+    env:
+    - name: SECRET
+      value: "secret"
+    - name: KTTY_TAG
+      value: "latest"
 ---
 apiVersion: v1
 kind: Service

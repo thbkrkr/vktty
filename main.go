@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	lifetime = 3 * time.Minute
+	lifetime = 10 * time.Minute
 
 	vkttyPath = "./deploy/vktty.sh"
 )
@@ -31,12 +31,17 @@ var (
 	poolParallelCreation = 3
 
 	recycleTick = time.NewTicker(10 * time.Second)
+
+	secret = os.Getenv("SECRET")
 )
 
 func main() {
 	pool := NewPool(poolCapacity, poolSize)
 
 	r := gin.Default()
+	basicAuth := gin.BasicAuth(gin.Accounts{
+		"admin": secret,
+	})
 
 	r.GET("/ls", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
@@ -44,7 +49,7 @@ func main() {
 		})
 	})
 
-	r.GET("/sudo/ls", func(c *gin.Context) {
+	r.GET("/sudo/ls", basicAuth, func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"vclusters": pool.SudoLs(),
 		})

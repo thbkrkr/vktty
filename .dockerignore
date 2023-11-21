@@ -2,3 +2,4 @@ ktty
 Makefile
 Dockerfile
 vktty.yaml
+.secret

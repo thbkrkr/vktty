@@ -32,8 +32,10 @@ metadata:
 spec: 
   serviceAccountName: ktty-sa
   containers: 
-  - name: ktty 
-    image: krkr/ktty:69e9795
+  - name: ktty
+    # @ktty-tag:latest
+    image: krkr/ktty:latest
+    # @cred:yolo
     args: ["--port=8042", "--permit-write", "--credential=z:yolo", "tmux"]
     stdin: true 
     tty: true
@@ -52,4 +54,5 @@ spec:
   ports:
   - protocol: TCP
     port: 8042
+    # @nodePort:31320
     nodePort: 31320

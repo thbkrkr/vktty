@@ -1,40 +1,39 @@
-VERSION := $(shell git rev-parse --short HEAD)
+ORG 	= krkr
+NAME 	= vktty
+TAG     := $(shell docker inspect $(ORG)/$(NAME) | jq '.[0].RepoDigests[0]' | sha1sum | cut -c1-10)
+
+all: ktty-build-push build push up
 
 # ktty
 
-ktty-release:
+KTTY_TAG := $(shell make -C ktty tag)
+
+ktty-build-push:
 	make -C ktty build push
 
-test-ktty-docker:
-	docker run -p 8042:8042 -ti krkr/ktty:1571132 \
-		--port 8042 --permit-write --credential z:yolo tmux
-
-test-ktty-kube:
-	kubectl apply -f ktty.yaml
-
-rm-ktty-kube:
-	kubectl delete po ktty --force
-	kubectl delete svc ktty
-
-# vktty
+# build
 
 build:
-	docker buildx build --rm -t krkr/vktty:$(VERSION) . --platform=linux/amd64
-	docker tag krkr/vktty:${VERSION} krkr/vktty:latest
+	docker buildx build --rm -t $(ORG)/$(NAME):latest . --platform=linux/amd64
 
 push:
-	docker push krkr/vktty:latest
-	docker push krkr/vktty:$(VERSION)
+	docker tag $(ORG)/$(NAME):latest $(ORG)/$(NAME):$(TAG)
+	docker push $(ORG)/$(NAME):latest
+	docker push $(ORG)/$(NAME):$(TAG)
 
 test: VERSION = latest
 test: build
 	docker run --rm -p 8080:8080 --entrypoint sh -ti krkr/vktty:$(VERSION)
 
+# deploy
+
+SECRET := $(shell cat .secret)
+
 up:
-	sed "s/:latest/:$(VERSION)/" vktty.yaml | \
+	@sed -e "s/value: latest/value: $(KTTY_TAG)/" -e "s/:latest/:$(TAG)/" -e "s/secret/$(SECRET)/" vktty.yaml | \
 		kubectl apply -f-
 
-rm:
+del:
 	kubectl delete -f vktty.yaml
 
 get:
@@ -46,19 +45,26 @@ logs:
 exec:
 	kubectl -n default exec -ti vktty -- bash
 
+# api
+
+API    := vktty.miaou.space:31319
+
+sls:
+	@curl http://admin:$(SECRET)@$(API)/sudo/ls -s | jq -c '.vclusters[]'
+
 ls:
-	@curl http://vktty.miaou.space:31325/sudo/ls -s | jq -c '.vclusters[]'
+	@curl http://$(API)/ls -s | jq -c '.vclusters[]'
 
 lock:
-	@curl http://vktty.miaou.space:31325/lock
+	@curl http://$(API)/lock
 
 # dev
 
 godev:
-	go run main.go
+	SECRET=dev KTTY_TAG=$(VERSION) go run main.go
 
 devls:
-	@ curl localhost:8080/sudo/ls -s | jq -c '.vclusters[]'
+	@ curl admin:dev@localhost:8080/sudo/ls -s | jq -c '.vclusters[]'
 
 devlock:
 	@ curl localhost:8080/lock

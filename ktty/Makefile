@@ -1,21 +1,33 @@
-ORG 		= krkr
-NAME 		= ktty
-VERSION = $(shell git rev-parse --short HEAD)
+ORG 	= krkr
+NAME 	= ktty
+TAG     := $(shell docker inspect $(ORG)/$(NAME) | jq '.[0].RepoDigests[0]' | sha1sum | cut -c1-10)
 
-all: build
+all: build push
+
+tag:
+	@echo $(TAG)
 
 build:
-	docker buildx build --rm -t $(ORG)/$(NAME):$(VERSION) . --platform=linux/amd64
-	docker tag $(ORG)/$(NAME):${VERSION} $(ORG)/$(NAME):latest
+	docker buildx build --rm -t $(ORG)/$(NAME):latest . --platform=linux/amd64
 
 push:
+	docker tag $(ORG)/$(NAME):latest $(ORG)/$(NAME):$(TAG)
 	docker push $(ORG)/$(NAME):latest
-	docker push $(ORG)/$(NAME):${VERSION}
+	docker push $(ORG)/$(NAME):$(TAG)
 
-test: VERSION = latest
 test: build
 	docker run --rm \
 		-u root \
 		-v $$(pwd)/home:/home/z/.home \
 		--entrypoint zsh \
-		-ti $(ORG)/$(NAME)
+		-ti $(ORG)/$(NAME):latest
+
+test-run:
+	docker run -p 8042:8042 -ti krkr/ktty:latest \
+		--port 8042 --permit-write --credential z:yolo tmux
+
+test-up:
+	kubectl apply -f ktty.yaml
+
+test-del:
+	kubectl delete -f ktty.yaml
