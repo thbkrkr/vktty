@@ -15,32 +15,39 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/kelseyhightower/envconfig"
 )
 
 const (
-	lifetime = 10 * time.Minute
-
+	port      = 8042
 	vkttyPath = "./deploy/vktty.sh"
 )
 
-var (
-	domain = "vktty.miaou.space"
+var recycleTick = time.NewTicker(10 * time.Second)
 
-	poolCapacity         = 1
-	poolSize             = 5
-	poolParallelCreation = 3
+type Config struct {
+	Lifetime             time.Duration
+	PoolCapacity         int `envconfig:"POOL_CAPACITY"`
+	PoolSize             int `envconfig:"POOL_SIZE"`
+	PoolParallelCreation int `envconfig:"POOL_PARALLEL_CREATION"`
 
-	recycleTick = time.NewTicker(10 * time.Second)
-
-	secret = os.Getenv("SECRET")
-)
+	Domain string
+	Blurb  string `envconfig:"BLURB"`
+}
 
 func main() {
-	pool := NewPool(poolCapacity, poolSize)
+	var s Config
+	err := envconfig.Process("vktty", &s)
+	if err != nil {
+		log.Fatal("fail to process env config:", err.Error())
+	}
+	//fmt.Println("config", s)
+
+	pool := NewPool(s)
 
 	r := gin.Default()
 	basicAuth := gin.BasicAuth(gin.Accounts{
-		"admin": secret,
+		"admin": s.Blurb,
 	})
 
 	r.GET("/ls", func(c *gin.Context) {
@@ -64,7 +71,7 @@ func main() {
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{
-			"🐰": fmt.Sprintf("http://z:%s@%s:3132%d", vcluster.password, domain, vcluster.ID),
+			"🐰": fmt.Sprintf("http://z:%s@%s:3132%d", vcluster.password, s.Domain, vcluster.ID),
 		})
 	})
 
@@ -74,7 +81,7 @@ func main() {
 		})
 	})
 
-	r.Run()
+	r.Run(fmt.Sprintf(":%d", port))
 }
 
 type Status string
@@ -96,17 +103,19 @@ type VCluster struct {
 }
 
 type Pool struct {
+	config    Config
 	vclusters []*VCluster
 	mux       sync.Mutex
 }
 
-func NewPool(capacity int, size int) *Pool {
+func NewPool(c Config) *Pool {
 	p := &Pool{
-		vclusters: make([]*VCluster, size),
+		config:    c,
+		vclusters: make([]*VCluster, c.PoolSize),
 		mux:       sync.Mutex{},
 	}
 
-	for i := 0; i < capacity; i++ {
+	for i := 0; i < c.PoolCapacity; i++ {
 		go func(i int) {
 			p.mux.Lock()
 			p.vclusters[i] = &VCluster{ID: i, Status: Creating}
@@ -168,7 +177,7 @@ func (p *Pool) Get() (VCluster, error) {
 		if v != nil && v.Status == Creating {
 			creating++
 		}
-		if v == nil && creating < poolParallelCreation {
+		if v == nil && creating < int(p.config.PoolParallelCreation) {
 			p.vclusters[i] = &VCluster{ID: i, Status: Creating}
 
 			go func(i int) {
@@ -187,7 +196,7 @@ func (p *Pool) Recycle() {
 	for range recycleTick.C {
 		p.mux.Lock()
 		for i, v := range p.vclusters {
-			if isEOL(v) {
+			if isEOL(p.config.Lifetime, v) {
 				v.Status = "deleting"
 				v.Creation = nil
 				p.vclusters[i] = v
@@ -206,7 +215,7 @@ func (p *Pool) Recycle() {
 	}
 }
 
-func isEOL(v *VCluster) bool {
+func isEOL(lifetime time.Duration, v *VCluster) bool {
 	return v != nil &&
 		(v.Creation != nil && time.Now().After(v.Creation.Add(lifetime)) ||
 			v.Status == Error)

@@ -2,7 +2,10 @@ module github.com/thbkrkr/vktty
 
 go 1.21.3
 
-require github.com/gin-gonic/gin v1.9.1
+require (
+	github.com/gin-gonic/gin v1.9.1
+	github.com/kelseyhightower/envconfig v1.4.0
+)
 
 require (
 	github.com/bytedance/sonic v1.9.1 // indirect
