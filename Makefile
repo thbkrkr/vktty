@@ -28,6 +28,14 @@ test: build
 
 # deploy
 
+tags:
+	@echo KTTY_TAG=$(KTTY_TAG)
+	@echo VKTTY_TAG=$(TAG)
+
+check:
+	ksecret vktty-envconfig
+	kubectl get deploy -o yaml | grep "image:"
+
 config:
 	kubectl delete secret vktty-envconfig 2> /dev/null || true
 	kubectl create secret generic vktty-envconfig --from-env-file=.env/.prod.env

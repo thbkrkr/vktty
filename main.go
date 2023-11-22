@@ -41,7 +41,9 @@ func main() {
 	if err != nil {
 		log.Fatal("fail to process env config:", err.Error())
 	}
-	//fmt.Println("config", s)
+	if s.Blurb == "dev" {
+		log.Println("config", s)
+	}
 
 	pool := NewPool(s)
 
