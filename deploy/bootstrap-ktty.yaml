@@ -35,7 +35,7 @@ spec:
   - name: ktty
     # @ktty-tag:latest
     image: krkr/ktty:latest
-    # @cred:yolo
+    # @blurb:yolo
     args: ["--port=8042", "--permit-write", "--credential=z:yolo", "tmux"]
     stdin: true 
     tty: true

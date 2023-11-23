@@ -38,6 +38,7 @@ spec:
     metadata:
       labels:
         app: vktty
+        config: c0nfig
     spec:
       serviceAccountName: vktty-sa
       containers:

@@ -1,16 +1,14 @@
 ORG 	= krkr
 NAME 	= vktty
-TAG     = $(shell docker inspect $(ORG)/$(NAME) | jq '.[0].RepoDigests[0]' | sha1sum | cut -c1-10)
+TAG     = $(shell cat main.go deploy/* | sha1sum | cut -c1-10)
 
 all: ktty-build-push build push config up
 
 # ktty
 
-KTTY_TAG = $(shell make -C ktty tag)
-
 ktty-build-push:
 	make -C ktty build push
-	sed -e "s/KTTY_TAG=.*/KTTY_TAG=$(KTTY_TAG)/" -i .bak .env/.prod.env
+	sed -e "s/KTTY_TAG=.*/KTTY_TAG=$(shell make -C ktty tag)/" -i .bak .env/.prod.env
 
 # build
 
@@ -29,7 +27,7 @@ test: build
 # deploy
 
 tags:
-	@echo KTTY_TAG=$(KTTY_TAG)
+	@echo KTTY_TAG=$(shell make -C ktty tag)
 	@echo VKTTY_TAG=$(TAG)
 
 check:
@@ -41,7 +39,8 @@ config:
 	kubectl create secret generic vktty-envconfig --from-env-file=.env/.prod.env
 
 up:
-	@sed "s/:latest/:$(TAG)/" vktty.yaml | kubectl apply -f-
+	@sed -e "s/:latest/:$(TAG)/" -e "s/c0nfig/$(shell sha1sum .env/.prod.env | cut -c1-8)/" vktty.yaml \
+		| kubectl apply -f-
 
 del:
 	kubectl delete -f vktty.yaml

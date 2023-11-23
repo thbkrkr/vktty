@@ -79,7 +79,7 @@ func main() {
 
 	r.GET("/", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
-			"message": "pong",
+			"message": "🐰",
 		})
 	})
 
@@ -150,6 +150,7 @@ func (p *Pool) Ls() []VCluster {
 
 func (p *Pool) SudoLs() []VCluster {
 	vclusters := p.Ls()
+	// expose sensitive data
 	for i := range vclusters {
 		password := vclusters[i].password
 		if password != "" {
@@ -174,6 +175,7 @@ func (p *Pool) Get() (VCluster, error) {
 			return *v, nil
 		}
 	}
+	// precreate
 	creating := 0
 	for i, v := range p.vclusters {
 		if v != nil && v.Status == Creating {
