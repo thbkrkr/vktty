@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,12 +14,13 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/kelseyhightower/envconfig"
+	env "github.com/kelseyhightower/envconfig"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 const (
-	port      = 8042
-	vkttyPath = "./deploy/vktty.sh"
+	port = 8042
 )
 
 var recycleTick = time.NewTicker(10 * time.Second)
@@ -33,23 +33,27 @@ type Config struct {
 
 	Domain string
 	Blurb  string `envconfig:"BLURB"`
+
+	ScriptPath string `envconfig:"SCRIPT_PATH"`
 }
 
 func main() {
-	var s Config
-	err := envconfig.Process("vktty", &s)
+	var cfg Config
+	err := env.Process("vktty", &cfg)
 	if err != nil {
-		log.Fatal("fail to process env config:", err.Error())
-	}
-	if s.Blurb == "dev" {
-		log.Println("config", s)
+		log.Fatal("fail to process env:", err.Error())
 	}
 
-	pool := NewPool(s)
+	logger := newLogger(cfg)
+	logger.Info("Start",
+		zap.String("env", Env(cfg)),
+		zap.String("config", fmt.Sprintf("+%v", cfg)))
+
+	pool := NewPool(cfg, logger)
 
 	r := gin.Default()
 	basicAuth := gin.BasicAuth(gin.Accounts{
-		"admin": s.Blurb,
+		"admin": cfg.Blurb,
 	})
 
 	r.GET("/ls", func(c *gin.Context) {
@@ -73,7 +77,7 @@ func main() {
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{
-			"🐰": fmt.Sprintf("http://z:%s@%s:3132%d", vcluster.password, s.Domain, vcluster.ID),
+			"🐰": fmt.Sprintf("http://z:%s@%s:3132%d", vcluster.key, cfg.Domain, vcluster.ID),
 		})
 	})
 
@@ -99,40 +103,39 @@ var (
 type VCluster struct {
 	ID       int
 	Creation *time.Time `json:",omitempty"`
-	Password *string    `json:",omitempty"`
-	password string
+	Key      string     `json:",omitempty"`
+	key      string
 	Status   Status
 }
 
 type Pool struct {
+	l         *zap.Logger
 	config    Config
 	vclusters []*VCluster
-	mux       sync.Mutex
+	mux       *sync.Mutex
 }
 
-func NewPool(c Config) *Pool {
+func NewPool(c Config, l *zap.Logger) *Pool {
 	p := &Pool{
+		l:         l,
 		config:    c,
 		vclusters: make([]*VCluster, c.PoolSize),
-		mux:       sync.Mutex{},
+		mux:       &sync.Mutex{},
 	}
 
-	for i := 0; i < c.PoolCapacity; i++ {
-		go func(i int) {
-			p.mux.Lock()
-			p.vclusters[i] = &VCluster{ID: i, Status: Creating}
-			p.mux.Unlock()
-
-			err := p.Add(i)
-			if err != nil {
-				log.Println("While creating: ", err)
-			}
-		}(i)
-	}
-
-	go p.Recycle()
+	p.Init(c)
+	go p.Start()
 
 	return p
+}
+
+func (p *Pool) Init(c Config) {
+	for i := 0; i < c.PoolCapacity; i++ {
+		p.mux.Lock()
+		p.vclusters[i] = &VCluster{ID: i, Status: Creating}
+		p.mux.Unlock()
+		go p.Add(i)
+	}
 }
 
 func (p *Pool) Ls() []VCluster {
@@ -152,135 +155,168 @@ func (p *Pool) SudoLs() []VCluster {
 	vclusters := p.Ls()
 	// expose sensitive data
 	for i := range vclusters {
-		password := vclusters[i].password
-		if password != "" {
-			vclusters[i].Password = &password
-		}
+		vclusters[i].Key = vclusters[i].key
 	}
 	return vclusters
 }
+
+var (
+	errCreating                = errors.New("please come back in a moment")
+	errMaxPoolParallelCreation = errors.New("please come back later")
+	errMaxCapacity             = errors.New("max capacity")
+)
 
 func (p *Pool) Get() (VCluster, error) {
 	p.mux.Lock()
 	defer p.mux.Unlock()
 
-	for i, v := range p.vclusters {
-		if v != nil && v.Status == Free {
+	creating := 0
 
-			log.Println("Lock c", v.ID)
+	// look for a free vcluster
+	for i, v := range p.vclusters {
+		if v == nil {
+			continue
+		}
+		if v.Status == Creating {
+			creating++
+		}
+		if v.Status == Free {
+			p.l.Info("Lock", zap.Int("id", v.ID))
 			now := time.Now()
 			p.vclusters[i].Creation = &now
 			p.vclusters[i].Status = Locked
-
 			return *v, nil
 		}
 	}
-	// precreate
-	creating := 0
-	for i, v := range p.vclusters {
-		if v != nil && v.Status == Creating {
-			creating++
-		}
-		if v == nil && creating < int(p.config.PoolParallelCreation) {
-			p.vclusters[i] = &VCluster{ID: i, Status: Creating}
+	// check if max creation is reached
+	if creating < int(p.config.PoolParallelCreation) {
+		return VCluster{}, errMaxPoolParallelCreation
+	}
 
-			go func(i int) {
-				err := p.Add(i)
-				if err != nil {
-					log.Println("While locking:", err)
-				}
-			}(i)
-			return VCluster{}, errors.New("please come back in 1 min")
+	// else create a cluster if there is space left
+	for i, v := range p.vclusters {
+		if v == nil {
+			p.vclusters[i] = &VCluster{ID: i, Status: Creating}
+			go p.Add(i)
+			return VCluster{}, errCreating
 		}
 	}
-	return VCluster{}, errors.New("service too busy")
+
+	return VCluster{}, errMaxCapacity
 }
 
-func (p *Pool) Recycle() {
+func (p *Pool) Start() {
 	for range recycleTick.C {
 		p.mux.Lock()
 		for i, v := range p.vclusters {
-			if isEOL(p.config.Lifetime, v) {
-				v.Status = "deleting"
+			if isEOL(v, p.config.Lifetime) {
+				v.Status = Deleting
 				v.Creation = nil
 				p.vclusters[i] = v
-
-				go func(i int) {
-					err := p.Do(i, "delete", func(*VCluster, cmdResult) *VCluster {
-						return nil
-					})
-					if err != nil {
-						log.Println("While recycling:", err)
-					}
-				}(i)
+				go p.Delete(i)
 			}
 		}
 		p.mux.Unlock()
 	}
 }
 
-func isEOL(lifetime time.Duration, v *VCluster) bool {
+func isEOL(v *VCluster, lifetime time.Duration) bool {
 	return v != nil &&
 		(v.Creation != nil && time.Now().After(v.Creation.Add(lifetime)) ||
 			v.Status == Error)
-
 }
 
-type cmdResult struct {
-	Status   int
-	Password string
-	Log      string
-}
-
-func (p *Pool) Add(i int) error {
-	return p.Do(i, "create", func(v *VCluster, r cmdResult) *VCluster {
-		v.password = r.Password
+func (p *Pool) Add(i int) {
+	p.Exec(i, "create", func(v *VCluster, r execResult) *VCluster {
+		v.key = r.Key
 		v.Status = Free
 		return v
 	})
 }
 
-func (p *Pool) errorf(format string, action string, i int, err error, a ...any) error {
+func (p *Pool) Delete(i int) {
+	p.Exec(i, "delete", func(*VCluster, execResult) *VCluster {
+		// no more
+		return nil
+	})
+}
+
+type execResult struct {
+	Status int
+	Key    string
+}
+
+func (p *Pool) Exec(i int, action string, callback func(*VCluster, execResult) *VCluster) {
+	li := p.l.With(zap.Int("id", i), zap.String("action", action))
+	li.Info("Start")
+
+	cmd := exec.Command(p.config.ScriptPath, action, fmt.Sprintf("%d", i))
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	cmd.Stdout = stdout
+	cmd.Stderr = io.MultiWriter(os.Stderr, stderr)
+	err := cmd.Run()
+	if err != nil {
+		if _, ok := err.(*exec.ExitError); !ok {
+			p.Error(li, i, "Unexpected", zap.Error(err), stdout, stderr)
+			return
+		}
+	}
+
+	var res execResult
+	err = json.Unmarshal(stdout.Bytes(), &res)
+	if err != nil {
+		p.Error(li, i, "Parsing", zap.Error(err), stdout, stderr)
+		return
+	}
+	if res.Status != 0 {
+		p.Error(li, i, "Error", zap.Int("status_code", res.Status), stdout, stderr)
+		return
+	}
+
+	p.mux.Lock()
+	p.vclusters[i] = callback(p.vclusters[i], res)
+	p.mux.Unlock()
+
+	li.Info("Succeeded")
+}
+
+func (p *Pool) Error(l *zap.Logger, i int, msg string, f zapcore.Field, stdout *bytes.Buffer, stderr *bytes.Buffer) {
 	p.mux.Lock()
 	p.vclusters[i] = &VCluster{ID: i, Status: Error}
 	p.mux.Unlock()
-	return fmt.Errorf(format, action, i, err, a)
+	l.Error(msg,
+		f,
+		zap.String("stdout", stdout.String()),
+		zap.String("stderr", stderr.String()),
+	)
 }
 
-func (p *Pool) Do(i int, action string, callback func(*VCluster, cmdResult) *VCluster) error {
-	log.Printf("Start %s c%d", action, i)
+func newLogger(c Config) *zap.Logger {
+	stdout := zapcore.AddSync(os.Stdout)
+	level := zap.NewAtomicLevelAt(zap.InfoLevel)
 
-	cmd := exec.Command(vkttyPath, action, fmt.Sprintf("%d", i))
-	stdout := bytes.Buffer{}
-	stderr := bytes.Buffer{}
-	cmd.Stdout = io.MultiWriter(os.Stdout, &stdout)
-	cmd.Stderr = io.MultiWriter(os.Stderr, &stderr)
-	err := cmd.Run()
-	if err != nil {
-		log.Printf("error: fail to do %s c%d, err: %s, out: %s", action, i, err, stderr.String())
+	z := zap.NewProductionEncoderConfig()
+	z.TimeKey = "timestamp"
+	z.EncodeTime = zapcore.ISO8601TimeEncoder
+
+	if isDev(c) {
+		z = zap.NewDevelopmentEncoderConfig()
+		z.EncodeLevel = zapcore.CapitalColorLevelEncoder
 	}
 
-	var ret cmdResult
-	err = json.Unmarshal(stdout.Bytes(), &ret)
-	if err != nil {
-		return p.errorf("fail to parse %s result for c%d, err: %s, out: %s", action, i, err, stdout.String())
-	}
-	if ret.Status != 0 {
-		log, _ := base64.StdEncoding.DecodeString(ret.Log)
-		return p.errorf("fail to %s c%d, err: %s, log: %s", action, i, fmt.Errorf("status code %d", ret.Status), stdout.String(), log)
-	}
-
-	p.mux.Lock()
-	p.vclusters[i] = callback(p.vclusters[i], ret)
-	p.mux.Unlock()
-
-	log.Printf("End %s c%d", action, i)
-
-	return nil
+	return zap.New(zapcore.NewCore(
+		zapcore.NewConsoleEncoder(z), stdout, level))
 }
 
-func (p *Pool) Delete(action string, i int) error {
-	return p.Do(i, "delete", func(*VCluster, cmdResult) *VCluster {
-		return nil
-	})
+func Env(c Config) string {
+	env := "prod"
+	if isDev(c) {
+		env = "dev"
+	}
+	return env
+}
+
+func isDev(c Config) bool {
+	return c.Blurb == "dev"
 }

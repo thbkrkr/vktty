@@ -12,55 +12,40 @@ help() {
 
 : $KTTY_TAG
 
-boostrap_template=deploy/bootstrap-ktty.yaml
+tpl() {
+  file=$1
+  echo "sed $(grep sed $file | sed "s/# @sed/-e/" | xargs) $file" | sh
+}
+
+function create() {
+  export i=$1
+  bootstrap_file=$2
+  export uuid=$(uuid_gen)
+  
+  vcluster --log-output=json create "c$i" --expose --connect=false 1>&2 \
+  && \
+  tpl $bootstrap_file \
+    | vcluster connect c$i -- kubectl apply -f- 1>&2
+
+  echo '{"Status": '$?',"Key":"'$uuid'"}'
+}
+
+delete() {
+  i=$1
+  vcluster delete --log-output=json "c$1" 1>&2
+  echo '{"Status": '$?'}'
+}
 
 uuid_gen() {
   cat /proc/sys/kernel/random/uuid 2>/dev/null || echo "$RANDOM-$RANDOM-$RANDOM-$RANDOM"
 }
 
-boostrap_template() {
-  uuid="$1"
-  tag="$KTTY_TAG"
-  sed -e "s/latest/$tag/" -e "s/31320/3132$i/" -e "s/yolo/$uuid/" "$boostrap_template"
-}
-
-create() {
-  i=$1
-
-  vcluster create "c$i" --expose --connect=false \
-    1>&2 | tee log/c$i-vcluster-create.log
-
-  status=$?
-  mv log/c$i-vcluster-create.log log/c$i-vcluster-create-$status.log
-
-  uuid=$(uuid_gen)
-  boostrap_template "$uuid" | vcluster connect c$i -- kubectl apply -f- 1>&2 | tee log/c$i-kubectl-apply.log
-
-  status2=$?
-  mv log/c$i-kubectl-apply.log log/c$i-kubectl-apply-$status2.log
-
-  echo '{"Password":"'$uuid'", "Status": '$(($status+$status2))', "Log": "'$(cat log/c$i* | base64)'"}'
-}
-
-delete() {
-  i=$1
-
-  vcluster delete "c$i" 1>&2 | tee log/c$i-vcluster-delete.log
-
-  status=$?
-  mv log/c$i-vcluster-delete.log log/c$i-vcluster-delete-$status.log
-
-  echo '{"Status": '$status', "Log": "'$(cat log/c$i* | base64)'"}'
-}
-
 main() {
   action=$1
   i=$2
-  
-  mkdir -p log
-  rm -rf log/c$i-*
+  bootstrap_file=${3:-}
   case "$action" in
-    c|create) create "$i" ;;
+    c|create) create "$i" "$bootstrap_file";;
     d|delete) delete "$i" ;;
     *)      help ;;
   esac

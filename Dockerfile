@@ -10,11 +10,9 @@ RUN --mount=type=cache,mode=0755,target=/go/pkg/mod CGO_ENABLED=0 GO111MODULE=on
 FROM alpine:3.18.4
 
 RUN apk add --update --no-cache curl bash
-RUN curl -L -o vcluster "https://github.com/loft-sh/vcluster/releases/latest/download/vcluster-linux-amd64" && \
+RUN curl -L -o vcluster "https://github.com/loft-sh/vcluster/releases/v0.17.1/download/vcluster-linux-amd64" && \
     chmod +x vcluster && mv vcluster /usr/bin
-
-ENV KUBECTL_VERSION=1.28.4
-RUN curl -fsSLO https://dl.k8s.io/v${KUBECTL_VERSION}/bin/linux/amd64/kubectl && \
+RUN curl -fsSLO https://dl.k8s.io/v1.28.4/bin/linux/amd64/kubectl && \
     mv kubectl /usr/local/bin/kubectl && chmod +x /usr/local/bin/kubectl
 
 COPY --from=go-builder /work/vktty /usr/bin/

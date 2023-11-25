@@ -22,25 +22,32 @@ roleRef:
   kind: ClusterRole
   name: cluster-admin 
 ---
-apiVersion: v1 
-kind: Pod 
-metadata: 
+apiVersion: apps/v1
+kind: Deployment
+metadata:
   name: ktty
-  namespace: ktty
   labels:
     app: ktty
-spec: 
-  serviceAccountName: ktty-sa
-  containers: 
-  - name: ktty
-    # @ktty-tag:latest
-    image: krkr/ktty:latest
-    # @blurb:yolo
-    args: ["--port=8042", "--permit-write", "--credential=z:yolo", "tmux"]
-    stdin: true 
-    tty: true
-    ports:
-    - containerPort: 8042
+spec:
+  selector:
+    matchLabels:
+      app: ktty
+  template:
+    metadata:
+      labels:
+        app: ktty
+    spec: 
+      serviceAccountName: ktty-sa
+      containers: 
+      - name: ktty
+        # @sed s/latest/$latest/
+        image: krkr/ktty:latest
+        # @sed s/blurb/$blurb/
+        args: ["--port=8042", "--permit-write", "--credential=z:blurb", "tmux"]
+        stdin: true 
+        tty: true
+        ports:
+        - containerPort: 8042
 ---
 apiVersion: v1
 kind: Service
@@ -54,5 +61,5 @@ spec:
   ports:
   - protocol: TCP
     port: 8042
-    # @nodePort:31320
+    # @sed s/31320/3132$i/
     nodePort: 31320

@@ -59,7 +59,7 @@ exec:
 ENV := $(shell cat .env/env)
 
 include .env/.$(ENV).env
-export sed 's/=.*//' .env/.$(ENV).env
+export .env/.$(ENV).env
 
 dev:
 	echo dev > .env/env
@@ -79,8 +79,7 @@ lock:
 # dev
 
 godev:
-	make dev
-	go run main.go
+	echo "$$(cat .env/.dev.env | xargs) go run main.go" | sh 
 
 kgetpo-ktty:
 	kubectl get po -l vcluster.loft.sh/namespace=ktty -A -o json | jq '.items[].spec.containers[].args' | grep sudo
