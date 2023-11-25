@@ -1,5 +1,6 @@
+.env
 ktty
-Makefile
 Dockerfile
+.gitignore
+Makefile
 vktty.yaml
-.secret

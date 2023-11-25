@@ -12,20 +12,13 @@ help() {
 
 : $KTTY_TAG
 
-tpl() {
-  file=$1
-  echo "sed $(grep sed $file | sed "s/# @sed/-e/" | xargs) $file" | sh
-}
-
 function create() {
   export i=$1
-  bootstrap_file=$2
   export uuid=$(uuid_gen)
   
   vcluster --log-output=json create "c$i" --expose --connect=false 1>&2 \
   && \
-  tpl $bootstrap_file \
-    | vcluster connect c$i -- kubectl apply -f- 1>&2
+  envsubst < bootstrap/ktty.yaml | vcluster connect c$i -- kubectl apply -f- 1>&2
 
   echo '{"Status": '$?',"Key":"'$uuid'"}'
 }
@@ -45,7 +38,7 @@ main() {
   i=$2
   bootstrap_file=${3:-}
   case "$action" in
-    c|create) create "$i" "$bootstrap_file";;
+    c|create) create "$i" ;;
     d|delete) delete "$i" ;;
     *)      help ;;
   esac

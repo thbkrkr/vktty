@@ -1,7 +1,7 @@
 ORG 	= krkr
 NAME 	= ktty
 
-TAG     := $(shell echo "$(shell find home -type f | xargs cat | sha1sum) $(shell cat Dockerfile | sha1sum)" | sha1sum | cut -c1-10)
+TAG     = $(shell echo "$(shell find home -type f | xargs cat | sha1sum) $(shell cat Dockerfile | sha1sum)" | sha1sum | cut -c1-10)
 
 all: build push
 
@@ -24,8 +24,8 @@ test: build
 		-ti $(ORG)/$(NAME):latest
 
 test-run:
-	docker run -p 8042:8042 -ti krkr/ktty:latest \
-		--port 8042 --permit-write --credential z:yolo tmux
+	docker run -p 8042:8042 -ti -e GOTTY_CREDENTIAL=z:yolo krkr/ktty:latest \
+		--port 8042 --permit-write tmux
 
 test-up:
 	kubectl apply -f ktty.yaml

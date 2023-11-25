@@ -1,8 +1,9 @@
 ORG 	= krkr
 NAME 	= vktty
-TAG     = $(shell cat main.go deploy/* | sha1sum | cut -c1-10)
 
-all: ktty-build-push build push config up
+export TAG = $(shell cat Dockerfile main.go go.* bootstrap/* | sha1sum | cut -c1-10)
+
+all: ktty-build-push build push config kup
 
 # ktty
 
@@ -31,27 +32,31 @@ tags:
 	@echo VKTTY_TAG=$(TAG)
 
 check:
-	ksecret vktty-envconfig
+	ksecret vktty-config
 	kubectl get deploy -o yaml | grep "image:"
 
 config:
-	kubectl delete secret vktty-envconfig 2> /dev/null || true
-	kubectl create secret generic vktty-envconfig --from-env-file=.env/.prod.env
+	kubectl delete secret vktty-config 2> /dev/null || true
+	kubectl create secret generic vktty-config --from-env-file=.env/.prod.env
 
-up:
-	@sed -e "s/:latest/:$(TAG)/" -e "s/c0nfig/$(shell sha1sum .env/.prod.env | cut -c1-8)/" vktty.yaml \
-		| kubectl apply -f-
+manifests:
+	envsubst < vktty.yaml
 
-del:
+export CONFIG_HASH = $(shell sha1sum .env/.prod.env | cut -c1-8)
+
+kup:
+	envsubst < vktty.yaml | kubectl apply -f-
+
+kdel:
 	kubectl delete -f vktty.yaml
 
-get:
+kget:
 	kubectl -n default get deploy,po,svc
 
-logs:
+klogs:
 	kubectl -n default logs -l app=vktty -f
 
-exec:
+kexec:
 	kubectl -n default exec $(shell kubectl -n default get po -l app=vktty -o json | jq -r '.items[0].metadata.name') -ti -- bash
 
 # api
@@ -68,13 +73,17 @@ prod:
 	@echo prod > .env/env
 
 sls:
-	@curl http://admin:$(VKTTY_BLURB)@$(VKTTY_DOMAIN)/sudo/ls -s | jq -c '.vclusters[]'
+	@curl http://admin:$(VKTTY_BLURB)@$(VKTTY_DOMAIN):$(VKTTY_PORT)/sudo/ls -s | jq -c '.vclusters[]'
 
 ls:
-	@curl http://$(VKTTY_DOMAIN)/ls -s | jq -c '.vclusters[]'
+	@curl http://$(VKTTY_DOMAIN):$(VKTTY_PORT)/ls -s | jq -c '.vclusters[]'
 
-lock:
-	@curl http://$(VKTTY_DOMAIN)/lock
+get:
+	@curl http://$(VKTTY_DOMAIN):$(VKTTY_PORT)/get -s | jq
+
+info:
+	@curl http://$(VKTTY_DOMAIN):$(VKTTY_PORT)/info -s | jq
+
 
 # dev
 

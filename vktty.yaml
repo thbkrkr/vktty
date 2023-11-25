@@ -38,18 +38,18 @@ spec:
     metadata:
       labels:
         app: vktty
-        config: c0nfig
+        config: "$CONFIG_HASH"
     spec:
       serviceAccountName: vktty-sa
       containers:
         - name: vktty
-          image: krkr/vktty:latest
+          image: krkr/vktty:${TAG}
           imagePullPolicy: Always
           ports:
             - containerPort: 8042
           envFrom:
             - secretRef:
-                name: vktty-envconfig
+                name: vktty-config
 ---
 apiVersion: v1
 kind: Service
