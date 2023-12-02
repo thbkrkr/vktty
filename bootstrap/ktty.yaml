@@ -44,17 +44,12 @@ spec:
         # @sed s/latest/$KTTY_TAG/
         image: krkr/ktty:${KTTY_TAG}
         imagePullPolicy: Always
-        # @sed s/blurb/$uuid/
+        # @sed s/key/$key/
         args: ["--port=8042", "--permit-write", "--credential=z:$key", "tmux"]
-        # command: ["bash"]
-        # args: [-c "sleep", "999999999"]
         stdin: true 
         tty: true
         ports:
         - containerPort: 8042
-        # env:
-        # - name: GOTTY_CREDENTIAL
-        #   value: z:$uuid
 ---
 apiVersion: v1
 kind: Service
