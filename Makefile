@@ -28,7 +28,7 @@ test: build
 # deploy
 
 tags:
-	@echo KTTY_TAG=$(shell make -C ktty tag)
+	@echo KTTY_TAG=$(shell git ls-remote https://github.com/thbkrkr/ktty | head -1 | cut -c1-7)
 	@echo VKTTY_TAG=$(TAG)
 
 check:

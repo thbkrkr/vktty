@@ -45,7 +45,7 @@ spec:
         image: krkr/ktty:${KTTY_TAG}
         imagePullPolicy: Always
         # @sed s/blurb/$uuid/
-        args: ["--port=8042", "--permit-write", "--credential=z:$uuid", "tmux"]
+        args: ["--port=8042", "--permit-write", "--credential=z:$key", "tmux"]
         # command: ["bash"]
         # args: [-c "sleep", "999999999"]
         stdin: true 

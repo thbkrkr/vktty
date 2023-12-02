@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,13 +19,6 @@ import (
 	env "github.com/kelseyhightower/envconfig"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/clientcmd"
-	"k8s.io/client-go/util/homedir"
 )
 
 const (
@@ -35,7 +27,6 @@ const (
 
 var (
 	recycleTick = time.NewTicker(10 * time.Second)
-	flushTick   = time.NewTicker(1 * time.Second)
 
 	errCreating                = errors.New("please come back in a moment")
 	errMaxPoolParallelCreation = errors.New("please come back later")
@@ -46,6 +37,8 @@ var (
 		errMaxPoolParallelCreation: 509, // Bandwidth Limit Exceeded
 		errMaxCapacity:             http.StatusServiceUnavailable,
 	}
+
+	execTimeout = 3 * time.Minute
 )
 
 type Config struct {
@@ -60,6 +53,12 @@ type Config struct {
 	ScriptPath string `envconfig:"SCRIPT_PATH"`
 }
 
+type App struct {
+	cfg  Config
+	pool *Pool
+	api  *gin.Engine
+}
+
 func main() {
 	var cfg Config
 	err := env.Process("vktty", &cfg)
@@ -72,43 +71,36 @@ func main() {
 		zap.String("env", Env(cfg)),
 		zap.String("config", fmt.Sprintf("+%v", cfg)))
 
-	kcfg, err := rest.InClusterConfig()
-	if err != nil {
-		kcfg, err = clientcmd.BuildConfigFromFlags("", filepath.Join(homedir.HomeDir(), "/.kube/config"))
-		if err != nil {
-			log.Fatal("fail to create k8s client config", err.Error())
-		}
-	}
-	k8sclient, err := kubernetes.NewForConfig(kcfg)
-	if err != nil {
-		log.Fatal("fail to create k8s client", err.Error())
-	}
+	App{
+		cfg:  cfg,
+		pool: NewPool(cfg, logger),
+		api:  gin.Default(),
+	}.Run()
+}
 
-	pool := NewPool(cfg, logger, k8sclient)
-
-	if isDev(cfg) {
+func (a App) Run() {
+	if isDev(a.cfg) {
 		gin.SetMode(gin.ReleaseMode)
 	}
-	r := gin.Default()
 
-	basicAuth := gin.BasicAuth(gin.Accounts{
-		"admin": cfg.Blurb,
+	auth := gin.BasicAuth(gin.Accounts{
+		"admin": a.cfg.Blurb,
 	})
 
-	r.GET("/ls", func(c *gin.Context) {
+	a.api.GET("/ls", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
-			"vclusters": pool.Ls(),
+			"vclusters": a.pool.Ls(),
 		})
 	})
 
-	r.GET("/sudo/ls", basicAuth, func(c *gin.Context) {
+	a.api.GET("/sudo/ls", auth, func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
-			"vclusters": pool.SudoLs(),
+			"vclusters": a.pool.SudoLs(),
 		})
 	})
 
-	r.GET("/get", func(c *gin.Context) {
-		vcluster, err := pool.Get()
+	a.api.GET("/get", func(c *gin.Context) {
+		vcluster, err := a.pool.Get()
 		if err != nil {
 			var s int
 			var ok bool
@@ -121,26 +113,26 @@ func main() {
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{
-			"msg": fmt.Sprintf("http://z:%s@%s:3132%d", vcluster.key, cfg.Domain, vcluster.ID),
+			"msg": fmt.Sprintf("http://z:%s@%s:3132%d", vcluster.key, a.cfg.Domain, vcluster.ID),
 		})
 	})
 
-	r.GET("/", func(c *gin.Context) {
+	a.api.GET("/", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"msg": "🐰",
 		})
 	})
 
-	r.GET("/info", func(c *gin.Context) {
+	a.api.GET("/info", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
-			"parallel_creation": cfg.PoolParallelCreation,
-			"capacity":          cfg.PoolCapacity,
-			"size":              cfg.PoolSize,
-			"lifetime":          cfg.Lifetime,
+			"parallel_creation": a.cfg.PoolParallelCreation,
+			"capacity":          a.cfg.PoolCapacity,
+			"size":              a.cfg.PoolSize,
+			"lifetime":          a.cfg.Lifetime.String(),
 		})
 	})
 
-	r.Run(fmt.Sprintf(":%d", port))
+	a.api.Run(fmt.Sprintf(":%d", port))
 }
 
 type Status string
@@ -151,6 +143,7 @@ var (
 	Locked   Status = "Locked"
 	Deleting Status = "Deleting"
 	Error    Status = "Error"
+	EOL      Status = "EOL"
 
 	Running Status = "Running"
 )
@@ -164,32 +157,34 @@ type VCluster struct {
 	Status  Status
 }
 
+func NewVCluster(i int) *VCluster {
+	return &VCluster{Name: fmt.Sprintf("c%d", i), ID: i, Status: Creating}
+}
+
 type Pool struct {
 	l         *zap.Logger
 	config    Config
 	vclusters []*VCluster
 	mux       *sync.Mutex
-	k         *kubernetes.Clientset
 }
 
-func NewPool(c Config, l *zap.Logger, k *kubernetes.Clientset) *Pool {
+func NewPool(cfg Config, l *zap.Logger) *Pool {
 	p := &Pool{
 		l:         l,
-		config:    c,
-		vclusters: make([]*VCluster, c.PoolSize),
+		config:    cfg,
+		vclusters: make([]*VCluster, cfg.PoolSize),
 		mux:       &sync.Mutex{},
-		k:         k,
 	}
 
-	p.Sync(c)
-	//go p.Flush()
+	p.Sync()
+	//p.Init()
 	go p.Start()
 
 	return p
 }
 
-func (p *Pool) Init(c Config) {
-	for i := 0; i < c.PoolCapacity; i++ {
+func (p *Pool) Init() {
+	for i := 0; i < p.config.PoolCapacity; i++ {
 		p.mux.Lock()
 		p.vclusters[i] = &VCluster{ID: i, Status: Creating}
 		p.mux.Unlock()
@@ -197,8 +192,8 @@ func (p *Pool) Init(c Config) {
 	}
 }
 
-func (p *Pool) Sync(c Config) {
-	p.l.Info("Start sync")
+func (p *Pool) Sync() {
+	p.l.Info("Sync")
 
 	cmd := exec.Command("vcluster", "ls", "--output=json")
 	out, err := cmd.CombinedOutput()
@@ -228,12 +223,14 @@ func (p *Pool) Sync(c Config) {
 		eol := p.isEOL(&v)
 		if prevStatus == Running && !eol {
 			v.Status = Locked
+			v.key = p.getKey(i)
+		} else if eol {
+			v.Status = EOL
 		}
 
 		p.vclusters[i] = &v
 		p.l.Info("Sync update", zap.Int("id", i),
-			zap.String("status", string(v.Status)), zap.String("prevStatus", string(prevStatus)),
-			zap.Bool("eol", eol))
+			zap.String("status", string(v.Status)), zap.String("prevStatus", string(prevStatus)))
 	}
 }
 
@@ -291,49 +288,13 @@ func (p *Pool) Get() (VCluster, error) {
 	for i := 0; i < p.config.PoolSize; i++ {
 		v := p.vclusters[i]
 		if v == nil {
-			// New
-			p.vclusters[i] = &VCluster{Name: fmt.Sprintf("c%d", i), ID: i, Status: Creating}
+			p.vclusters[i] = NewVCluster(i)
 			go p.Add(i)
 			return VCluster{}, errCreating
 		}
 	}
 
 	return VCluster{}, errMaxCapacity
-}
-
-func (p *Pool) Flush() {
-	for range flushTick.C {
-		p.mux.Lock()
-
-		bytes, err := json.Marshal(p.vclusters)
-		if err != nil {
-			p.l.Error("Fail to marshal", zap.Error(err))
-			break
-		}
-
-		p.mux.Unlock()
-
-		secret := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "vktty-data",
-			},
-			Data: map[string][]byte{
-				"vclusters": bytes,
-			},
-			Type: corev1.SecretTypeOpaque,
-		}
-
-		// Create the Secret
-		_, err = p.k.CoreV1().Secrets("default").Update(context.TODO(), secret, metav1.UpdateOptions{})
-		if err != nil {
-			_, err = p.k.CoreV1().Secrets("default").Create(context.TODO(), secret, metav1.CreateOptions{})
-			if err != nil {
-				p.l.Error("Flush", zap.Error(err))
-			}
-		}
-
-		p.l.Info("Flush")
-	}
 }
 
 func (p *Pool) Start() {
@@ -354,11 +315,12 @@ func (p *Pool) Start() {
 func (p *Pool) isEOL(v *VCluster) bool {
 	return v != nil &&
 		(v.Created != nil && time.Now().After(v.Created.Add(p.config.Lifetime)) ||
-			v.Status == Error)
+			v.Status == Error ||
+			v.Status == EOL)
 }
 
 func (p *Pool) Add(i int) {
-	p.Exec(i, "create", func(v *VCluster, r execResult) *VCluster {
+	p.Exec("create", i, func(v *VCluster, r execResult) *VCluster {
 		v.key = r.Key
 		v.Status = Free
 		return v
@@ -366,10 +328,19 @@ func (p *Pool) Add(i int) {
 }
 
 func (p *Pool) Delete(i int) {
-	p.Exec(i, "delete", func(*VCluster, execResult) *VCluster {
+	p.Exec("delete", i, func(*VCluster, execResult) *VCluster {
 		// no more
 		return nil
 	})
+}
+
+func (p *Pool) getKey(i int) string {
+	key := ""
+	p.Exec("status", i, func(v *VCluster, r execResult) *VCluster {
+		key = r.Key
+		return v
+	})
+	return key
 }
 
 type execResult struct {
@@ -377,11 +348,15 @@ type execResult struct {
 	Key    string
 }
 
-func (p *Pool) Exec(i int, action string, callback func(*VCluster, execResult) *VCluster) {
+func (p *Pool) Exec(action string, i int, callback func(*VCluster, execResult) *VCluster) {
 	li := p.l.With(zap.Int("id", i), zap.String("action", action))
 	li.Info("Start")
+	start := time.Now()
 
-	cmd := exec.Command(p.config.ScriptPath, action, fmt.Sprintf("%d", i))
+	ctx, cancel := context.WithTimeout(context.Background(), execTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, p.config.ScriptPath, action, fmt.Sprintf("%d", i))
 	stdout := &bytes.Buffer{}
 	stderr := &bytes.Buffer{}
 	cmd.Stdout = stdout
@@ -409,18 +384,21 @@ func (p *Pool) Exec(i int, action string, callback func(*VCluster, execResult) *
 		}
 		errNotFound := "couldn't find vcluster"
 		if strings.Contains(stderr.String(), errNotFound) {
-			p.Set(li, i, nil, "Reset", zap.Int("status_code", res.Status), zap.String("reason", "Not found"))
+			p.Update(li, i, nil)
+			li.Info("Reset", zap.Int("status_code", res.Status), zap.String("reason", "Not found"))
 			return
 		}
 		p.Error(li, i, "Unknown Error", zap.Int("status_code", res.Status), zap.String("stdout", stdout.String()), zap.String("stderr", stderr.String()))
 		return
 	}
 
-	p.mux.Lock()
-	p.vclusters[i] = callback(p.vclusters[i], res)
-	p.mux.Unlock()
+	if callback != nil {
+		p.mux.Lock()
+		p.vclusters[i] = callback(p.vclusters[i], res)
+		p.mux.Unlock()
+	}
 
-	li.Info("Succeeded")
+	li.Info("Succeeded", zap.Duration("duration", time.Since(start)))
 }
 
 func (p *Pool) Error(l *zap.Logger, i int, msg string, f ...zapcore.Field) {
@@ -430,11 +408,10 @@ func (p *Pool) Error(l *zap.Logger, i int, msg string, f ...zapcore.Field) {
 	l.Error(msg, f...)
 }
 
-func (p *Pool) Set(l *zap.Logger, i int, v *VCluster, msg string, f ...zapcore.Field) {
+func (p *Pool) Update(l *zap.Logger, i int, v *VCluster) {
 	p.mux.Lock()
 	p.vclusters[i] = v
 	p.mux.Unlock()
-	l.Info(msg, f...)
 }
 
 func newLogger(c Config) *zap.Logger {
