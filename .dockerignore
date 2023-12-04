@@ -1,5 +1,5 @@
 .env
-ktty
+vktty
 Dockerfile
 .gitignore
 Makefile

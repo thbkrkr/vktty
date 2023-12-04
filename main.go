@@ -219,13 +219,15 @@ func (p *Pool) Sync() {
 		}
 		v.ID = i
 		prevStatus := v.Status
-		v.Status = Error
-		eol := p.isEOL(&v)
-		if prevStatus == Running && !eol {
-			v.Status = Locked
-			v.key = p.getKey(i)
-		} else if eol {
-			v.Status = EOL
+		v.Status = Error // FIXME starting..
+		if prevStatus == Running {
+			eol := p.isEOL(&v)
+			if !eol {
+				v.Status = Locked
+				v.key = p.getKey(i)
+			} else {
+				v.Status = EOL
+			}
 		}
 
 		p.vclusters[i] = &v
