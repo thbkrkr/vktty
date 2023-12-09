@@ -5,8 +5,9 @@ help() {
   echo 'Usage: vktty.sh COMMAND
 
   Commands:
-    create ID     Create a vcluster with ktty
+    create ID     Create a vcluster applying bootstrap/*.yaml
     delete ID     Delete a vcluster
+    get    ID     Get a vcluster
 '
 }
 
@@ -15,11 +16,9 @@ help() {
 create() {
   export i=$1
   export key=$(uuid_gen)
-  
   vcluster --log-output=json create "c$i" --expose --connect=false 1>&2 \
   && \
-  envsubst < bootstrap/ktty.yaml | vcluster connect c$i -- kubectl apply -f- 1>&2
-
+  envsubst < bootstrap/*.yaml | vcluster connect c$i -- kubectl apply -f- 1>&2
   echo '{"Status": '$?',"Key":"'$key'"}'
 }
 
@@ -29,7 +28,7 @@ delete() {
   echo '{"Status": '$?'}'
 }
 
-status() {
+get() {
   i=$1
   pod=$(kubectl -n vcluster-c$i get pod -o json | jq -c '.items[] | select(.metadata.name | startswith("ktty"))')
   key=$(jq -r '.spec.containers[0].args[2]' <<< "$pod" | cut -d ':' -f2)
@@ -41,14 +40,13 @@ uuid_gen() {
 }
 
 main() {
-  action=$1
+  cmd=$1
   i=$2
-  bootstrap_file=${3:-}
-  case "$action" in
+  case "$cmd" in
     c|create) create "$i" ;;
     d|delete) delete "$i" ;;
-    s|status) status "$i" ;;
-    *)      help ;;
+    g|get)    get "$i" ;;
+    *)        help ;;
   esac
 }
 

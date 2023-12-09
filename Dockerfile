@@ -9,7 +9,7 @@ RUN --mount=type=cache,mode=0755,target=/go/pkg/mod CGO_ENABLED=0 GO111MODULE=on
 
 FROM alpine:3.18.4
 
-RUN apk add --update --no-cache curl bash envsubst
+RUN apk add --update --no-cache curl bash envsubst jq
 RUN curl -L -o vcluster "https://github.com/loft-sh/vcluster/releases/download/v0.17.1/vcluster-linux-amd64" && \
     chmod +x vcluster && mv vcluster /usr/bin
 RUN curl -fsSLO https://dl.k8s.io/v1.28.4/bin/linux/amd64/kubectl && \

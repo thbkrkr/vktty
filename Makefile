@@ -3,18 +3,22 @@ NAME 	= vktty
 
 export TAG = $(shell cat Dockerfile main.go go.* bootstrap/* | sha1sum | cut -c1-10)
 
-all: ktty-build-push build push config kup
+all: build config kup
 
 # ktty
 
+ktty-tag:
+	sed -e "s/KTTY_TAG=.*/KTTY_TAG=$(shell make -C ../ktty tag)/" -i .bak .env/.prod.env
+
 ktty-build-push:
 	make -C ktty build push
-	sed -e "s/KTTY_TAG=.*/KTTY_TAG=$(shell make -C ktty tag)/" -i .bak .env/.prod.env
+	sed -e "s/KTTY_TAG=.*/KTTY_TAG=$(shell make -C ../ktty tag)/" -i .bak .env/.prod.env
 
 # build
 
 build:
-	docker buildx build --rm -t $(ORG)/$(NAME):latest . --platform=linux/amd64
+	docker buildx build --rm -t $(ORG)/$(NAME):latest -t $(ORG)/$(NAME):$(TAG) \
+		. --platform=linux/amd64 --push
 
 push:
 	docker tag $(ORG)/$(NAME):latest $(ORG)/$(NAME):$(TAG)
@@ -82,8 +86,13 @@ get:
 	@curl http://$(VKTTY_DOMAIN):$(VKTTY_PORT)/get -s | jq
 
 info:
-	@curl http://$(VKTTY_DOMAIN):$(VKTTY_PORT)/info -s | jq
+	curl http://$(VKTTY_DOMAIN):$(VKTTY_PORT)/info -s | jq
 
+ready:
+	curl http://$(VKTTY_DOMAIN):$(VKTTY_PORT)/ready -s | jq
+
+metrics:
+	@curl http://$(VKTTY_DOMAIN):$(VKTTY_PORT)/metrics -s | grep '^vk_'
 
 # dev
 
