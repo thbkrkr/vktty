@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	stdlog "log"
 	"net/http"
 	"os/exec"
 	"strconv"
@@ -58,7 +58,7 @@ func main() {
 	var cfg Config
 	err := env.Process("vktty", &cfg)
 	if err != nil {
-		log.Fatal("fail to process env:", err.Error())
+		stdlog.Fatal("fail to process env:", err.Error())
 	}
 
 	logger := newLogger(cfg)
@@ -69,6 +69,10 @@ func main() {
 
 	newMetrics()
 
+	if !isDev(cfg) {
+		gin.SetMode(gin.ReleaseMode)
+	}
+
 	App{
 		cfg:  cfg,
 		pool: NewPool(cfg, logger),
@@ -77,9 +81,6 @@ func main() {
 }
 
 func (app App) Run() {
-	if !isDev(app.cfg) {
-		gin.SetMode(gin.ReleaseMode)
-	}
 
 	auth := gin.BasicAuth(gin.Accounts{
 		"admin": app.cfg.Blurb,
@@ -294,7 +295,7 @@ func (p *Pool) Sync(retry int) {
 		i, err := strconv.Atoi(strings.Replace(v.Name, "c", "", -1))
 		if err != nil {
 			// should not happen
-			log.Error("Fail to sync: parsing name error", zap.Error(err))
+			log.Error("Fail to sync parsing name", zap.Error(err))
 			return
 		}
 		v.ID = i
@@ -308,7 +309,12 @@ func (p *Pool) Sync(retry int) {
 				v.Status = Free //or Locked? FIXME
 				res, err := p.vclusterCli.Exec(p.log, getCmd, i)
 				if err == nil {
-					v.key = res.Key
+					if res.Key != "" {
+						v.key = res.Key
+					} else {
+						log.Error("Fail to sync reading key", zap.Error(errors.New("empty key")))
+						v.Status = Error
+					}
 				} else {
 					v.Status = Error
 				}
@@ -330,7 +336,7 @@ func (p *Pool) Sync(retry int) {
 		}
 
 		p.vclusters[i] = &v
-		log.Info("Sync", zap.Int("id", i), zap.String("status", string(v.Status)), zap.String("prevStatus", string(prevStatus)))
+		log.Info("Sync", zap.Int("id", i), zap.String("k", string(v.key)), zap.String("status", string(v.Status)), zap.String("prevStatus", string(prevStatus)))
 	}
 }
 
@@ -541,16 +547,16 @@ func (c vclusterCli) list() ([]VCluster, error) {
 }
 
 func newLogger(c Config) *zap.Logger {
-	z := zap.NewProductionConfig()
-	z.Sampling = nil
-	z.EncoderConfig.TimeKey = "timestamp"
-	z.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
-
-	if isDev(c) {
+	var z zap.Config
+	if !isDev(c) {
 		z = zap.NewDevelopmentConfig()
 		z.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
+	} else {
+		z = zap.NewProductionConfig()
+		z.Sampling = nil
+		z.EncoderConfig.TimeKey = "timestamp"
+		z.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
 	}
-
 	return zap.Must(z.Build())
 }
 

@@ -31,22 +31,30 @@ test: build
 
 # deploy
 
-tags:
-	@echo KTTY_TAG=$(shell git ls-remote https://github.com/thbkrkr/ktty | head -1 | cut -c1-7)
-	@echo VKTTY_TAG=$(TAG)
+# config hash is used as deployment label
+export CONFIG_HASH = $(shell sha1sum .env/.prod.env | cut -c1-8)
 
 check:
-	ksecret vktty-config
-	kubectl get deploy -o yaml | grep "image:"
+	@bash -c "diff <(make versions_expected | sort) <(make versions_running | sort)" && echo ok
+
+versions_expected:
+	@echo KTTY_TAG=$(shell git ls-remote https://github.com/thbkrkr/ktty | head -1 | cut -c1-7)
+	@echo VKTTY_TAG=$(TAG)
+	@echo CONFIG_HASH=${CONFIG_HASH}
+
+versions_running:
+	@ksecret vktty-config | grep KTTY_TAG | sed "s/.*KTTY_TAG:[[:blank:]]*/KTTY_TAG=/"
+	@kubectl get deploy -o yaml | grep -E "image:|config:" | \
+		sed -e "s/.*config: /CONFIG_HASH=/" \
+			-e "s/.*image:.*:/VKTTY_TAG=/"
 
 config:
 	kubectl delete secret vktty-config 2> /dev/null || true
 	kubectl create secret generic vktty-config --from-env-file=.env/.prod.env
 
+# for testing
 manifests:
 	envsubst < vktty.yaml
-
-export CONFIG_HASH = $(shell sha1sum .env/.prod.env | cut -c1-8)
 
 kup:
 	envsubst < vktty.yaml | kubectl apply -f-
