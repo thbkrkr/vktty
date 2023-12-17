@@ -38,6 +38,7 @@ spec:
       labels:
         app: ktty
     spec: 
+      hostname: k
       serviceAccountName: ktty-sa
       containers: 
       - name: ktty
